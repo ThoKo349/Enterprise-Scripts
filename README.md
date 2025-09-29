@@ -34,7 +34,14 @@ iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/SCR
 | **AD-FindUsersNeverExpire.ps1** | Benutzer mit „Passwort läuft nie ab“ – Audit/Security. | `iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/AD-FindUsersNeverExpire.ps1")` |
 
 ---
+## Microsoft Active Directory
 
+| Skript | Zweck | Einzeiler |
+|---|---|---|
+| **AD-CheckADReplication.ps1** | Prüft den Status der AD Replication. | `iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/AD-CheckADReplication.ps1")` |
+
+
+---
 ## 🖥 Windows / Systemskripte (SYS)
 
 | Skript | Zweck | Einzeiler |
