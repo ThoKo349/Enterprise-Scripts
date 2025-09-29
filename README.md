@@ -10,11 +10,8 @@ Alle Skripte sind direkt aus GitHub per **Einzeiler** startbar.
 
 **Beliebiges Skript direkt ausführen (Beispiel):**
 ```powershell
-iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/Restart-VBR-Services.ps1")
+iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/SCRIPT-NAME.ps1")
 ```
-
-> `irm` = Invoke-RestMethod, `iex` = Invoke-Expression  
-> Tipp: Für mehr Kontrolle Skript zuerst herunterladen, prüfen, dann starten.
 
 ---
 
