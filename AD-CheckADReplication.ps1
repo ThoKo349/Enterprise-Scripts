@@ -4,32 +4,22 @@
 
 .DESCRIPTION
   - Liest alle DCs der aktuellen Domäne oder des gesamten Forests.
-  - Ermittelt für jeden DC die eingehenden Replikationspartner, den letzten erfolgreichen Sync,
-    die größte Replikationslatenz (Delta), sowie aktuelle Replikationsfehler.
-  - Bewertet die Gesundheit pro DC anhand konfigurierbarer Schwellwerte.
-  - Gibt eine kompakte Übersicht (Tabelle) und darunter ggf. detaillierte Fehler aus.
-  - Setzt Exitcode 1, wenn kritische Probleme gefunden wurden (nützlich für Automatisierung/Monitoring).
+  - Ermittelt eingehende Replikationspartner, letzten erfolgreichen Sync, maximale Latenz und Fehler.
+  - Bewertet die Gesundheit pro DC (Healthy/Degraded/Critical).
+  - Setzt Exitcode 1 bei Problemen (nützlich für Monitoring/Automatisierung).
 
 .PARAMETER Forest
   Prüft alle Domänen im Forest (Standard: nur aktuelle Domäne).
 
 .PARAMETER MaxHealthyHours
-  Maximal erlaubte Stunden seit dem letzten erfolgreichen eingehenden Replikationsevent,
-  bevor der Status "Degraded" (gelb) bzw. "Critical" (rot) wird. 
-  - Degraded: > MaxHealthyHours
-  - Critical: > (MaxHealthyHours * 2)
+  Maximal erlaubte Stunden seit letztem erfolgreichen eingehenden Replikationsevent.
+  Degraded: > MaxHealthyHours; Critical: > (MaxHealthyHours * 2).
 
 .PARAMETER ShowAll
-  Zeigt zusätzlich DCs ohne Partner (Edge-Cases) und solche ohne Daten (z. B. Offline) in der Übersicht.
-
-.EXAMPLE
-  .\AD-CheckADReplication.ps1
-
-.EXAMPLE
-  .\AD-CheckADReplication.ps1 -Forest -MaxHealthyHours 6
+  Zeigt auch DCs ohne eingehende Partner (Edge-Cases) in der Übersicht.
 
 .NOTES
-  Benötigt das Modul ActiveDirectory (RSAT). Als Benutzer mit Leserechten im AD ausführen.
+  Erfordert RSAT / ActiveDirectory-Modul.
 #>
 
 [CmdletBinding()]
@@ -43,38 +33,54 @@ param(
 function Assert-Module {
     param([string]$Name)
     if (-not (Get-Module -ListAvailable -Name $Name)) {
-        throw "Das erforderliche Modul '$Name' ist nicht installiert. Bitte RSAT / ActiveDirectory-Modul bereitstellen."
+        throw "Erforderliches Modul '$Name' ist nicht installiert. Bitte RSAT / ActiveDirectory-Modul bereitstellen."
     }
 }
 Assert-Module -Name ActiveDirectory
 Import-Module ActiveDirectory -ErrorAction Stop
 
 $now = Get-Date
-$criticalHours = [int]([math]::Max( ($MaxHealthyHours * 2), $MaxHealthyHours + 1 ))
+$criticalHours = [int]([math]::Max(($MaxHealthyHours * 2), $MaxHealthyHours + 1))
 
-# --- DC-Liste ermitteln -------------------------------------------------------
+# --- Domänenliste -------------------------------------------------------------
 $domains = @()
 if ($Forest) {
-    $forest = Get-ADForest
-    $domains = $forest.Domains
+    try {
+        $forest = Get-ADForest -ErrorAction Stop
+        $domains = $forest.Domains
+    } catch {
+        throw "Forest-Informationen konnten nicht gelesen werden: $($_.Exception.Message)"
+    }
 } else {
-    $domains = @((Get-ADDomain).DNSRoot)
+    try {
+        $domains = @((Get-ADDomain -ErrorAction Stop).DNSRoot)
+    } catch {
+        throw "Domäneninformationen konnten nicht gelesen werden: $($_.Exception.Message)"
+    }
 }
 
+if (-not $domains -or $domains.Count -eq 0) {
+    throw "Keine Domänen gefunden."
+}
+
+# --- DC-Liste je Domäne (FIX: nicht direkt an Pipe hängen) -------------------
 $allDcs = foreach ($d in $domains) {
     try {
         Get-ADDomainController -Server $d -Filter * -ErrorAction Stop
     } catch {
         Write-Warning "Konnte DC-Liste für Domäne '$d' nicht lesen: $($_.Exception.Message)"
     }
-} | Sort-Object HostName
+}
 
-if (-not $allDcs) {
+# Jetzt sortieren (kein leeres Pipe-Element mehr)
+$allDcs = $allDcs | Where-Object { $_ } | Sort-Object HostName
+
+if (-not $allDcs -or $allDcs.Count -eq 0) {
     Write-Error "Keine Domänencontroller gefunden."
     exit 2
 }
 
-# --- Replikationsdaten je DC sammeln -----------------------------------------
+# --- Replikationsdaten sammeln ------------------------------------------------
 $rows = @()
 $allFailures = @()
 
@@ -84,12 +90,12 @@ foreach ($dc in $allDcs) {
     $domain  = $dc.Domain
     $os      = $dc.OperatingSystem
 
-    # Partner-Metadaten (eingehend)
+    # Partner (eingehend)
     $partners = @()
     try {
         $partners = Get-ADReplicationPartnerMetadata -Target $dcName -Scope Server -PartnerType Incoming -ErrorAction Stop
     } catch {
-        Write-Warning "[$dcName] Konnte Partner-Metadaten nicht lesen: $($_.Exception.Message)"
+        Write-Warning "[$dcName] Partner-Metadaten nicht lesbar: $($_.Exception.Message)"
     }
 
     # Fehler (eingehend)
@@ -101,35 +107,32 @@ foreach ($dc in $allDcs) {
     }
 
     $inboundCount = ($partners | Measure-Object).Count
-    $lastSuccessTimes = $partners | Where-Object {$_.LastReplicationSuccess -ne $null} | Select-Object -ExpandProperty LastReplicationSuccess
+    $lastSuccessTimes = $partners | Where-Object { $_.LastReplicationSuccess } | Select-Object -ExpandProperty LastReplicationSuccess
     $lastSuccess = if ($lastSuccessTimes) { ($lastSuccessTimes | Sort-Object -Descending | Select-Object -First 1) } else { $null }
 
-    # Größte Latenz = größtes Delta zwischen jetzt und letztem Erfolg je Partner
     $largestDeltaHours = if ($lastSuccessTimes) {
         ($lastSuccessTimes | ForEach-Object { [math]::Round(($now - $_).TotalHours, 2) } | Measure-Object -Maximum).Maximum
     } else { [double]::PositiveInfinity }
 
     $failureCount = ($fail | Measure-Object).Count
 
-    # Health bestimmen
+    # Health
     $health = 'Healthy'
     if ($failureCount -gt 0 -or $largestDeltaHours -gt $MaxHealthyHours) { $health = 'Degraded' }
     if ($failureCount -gt 0 -and $largestDeltaHours -gt $criticalHours) { $health = 'Critical' }
-    if (-not $partners -and -not $ShowAll) {
-        # DC ohne eingehende Partner überspringen, außer ShowAll
-        # (kann bei RODC/neu promoteten DCs/Decommissionings vorkommen)
-    }
 
-    $rows += [PSCustomObject]@{
-        Domain        = $domain
-        Site          = $site
-        DC            = $dcName
-        InboundLinks  = $inboundCount
-        LastSuccess   = if ($lastSuccess) { $lastSuccess } else { $null }
-        MaxDeltaHrs   = if ([double]::IsInfinity($largestDeltaHours)) { $null } else { $largestDeltaHours }
-        Failures      = $failureCount
-        Health        = $health
-        OS            = $os
+    if ($ShowAll -or $inboundCount -gt 0 -or $failureCount -gt 0) {
+        $rows += [PSCustomObject]@{
+            Domain        = $domain
+            Site          = $site
+            DC            = $dcName
+            InboundLinks  = $inboundCount
+            LastSuccess   = if ($lastSuccess) { $lastSuccess } else { $null }
+            MaxDeltaHrs   = if ([double]::IsInfinity($largestDeltaHours)) { $null } else { $largestDeltaHours }
+            Failures      = $failureCount
+            Health        = $health
+            OS            = $os
+        }
     }
 
     if ($failureCount -gt 0) {
@@ -163,7 +166,6 @@ if ($allFailures.Count -gt 0) {
         Format-Table -AutoSize
 }
 
-# --- Exitcode für Automatisierung -------------------------------------------
-# 0 = OK, 1 = (mind.) ein DC 'Critical' oder es gibt Fehlerobjekte
+# --- Exitcode ----------------------------------------------------------------
 $hasCritical = $rows | Where-Object { $_.Health -eq 'Critical' }
 if ($hasCritical -or $allFailures.Count -gt 0) { exit 1 } else { exit 0 }
