@@ -1,82 +1,80 @@
 <# 
-  AD-CheckADReplication.ps1 (simple)
-  Prüft eingehende AD-Replikation je DC und zeigt eine kurze Übersicht.
-
-  Voraussetzungen:
-  - RSAT / ActiveDirectory-Modul
+  AD-CheckADReplication.ps1 (simple + Pause/Watch)
+  - Zeigt den eingehenden Replikationsstatus je DC der aktuellen Domäne.
+  - Bleibt am Ende offen (Enter zum Beenden).
+  - Optional: Watch-Modus mit periodischer Aktualisierung.
 #>
 
-# --- Grundeinstellungen (einfach anpassen) ---
-$MaxHealthyHours = 12   # Warnschwelle für maximale Replikationslatenz (in Stunden)
+param(
+    [int]$MaxHealthyHours = 12,  # Warnschwelle für maximale Replikationslatenz (Stunden)
+    [switch]$Watch,              # Wenn gesetzt, aktualisiert die Ansicht periodisch
+    [int]$IntervalSeconds = 15   # Aktualisierungsintervall im Watch-Modus
+)
 
-# --- Modul prüfen & laden ---
+function Show-Status {
+    $now = Get-Date
+
+    try {
+        $dcs = Get-ADDomainController -Filter * -ErrorAction Stop
+    } catch {
+        Write-Error "Domänencontroller konnten nicht gelesen werden: $($_.Exception.Message)"
+        return
+    }
+
+    $rows = foreach ($dc in $dcs) {
+        $dcName = $dc.HostName
+
+        # Partner (eingehend)
+        $partners = @()
+        try { $partners = Get-ADReplicationPartnerMetadata -Target $dcName -Scope Server -PartnerType Incoming -ErrorAction Stop } catch {}
+        $inboundCount = ($partners | Measure-Object).Count
+
+        $lastSuccessTimes = $partners | Where-Object { $_.LastReplicationSuccess } | Select-Object -ExpandProperty LastReplicationSuccess
+        $lastSuccess = if ($lastSuccessTimes) { ($lastSuccessTimes | Sort-Object -Descending | Select-Object -First 1) } else { $null }
+        $maxDelta = if ($lastSuccessTimes) {
+            ($lastSuccessTimes | ForEach-Object { ($now - $_).TotalHours } | Measure-Object -Maximum).Maximum
+        } else { $null }
+
+        # Fehler (eingehend)
+        $fail = @(); try { $fail = Get-ADReplicationFailure -Target $dcName -Scope Server -ErrorAction SilentlyContinue } catch {}
+        $failureCount = ($fail | Measure-Object).Count
+
+        $health = 'OK'
+        if ($failureCount -gt 0 -or ($maxDelta -ne $null -and $maxDelta -gt $MaxHealthyHours)) { $health = 'Problem' }
+
+        [PSCustomObject]@{
+            DC           = $dcName
+            Site         = $dc.Site
+            InboundLinks = $inboundCount
+            LastSuccess  = if ($lastSuccess) { $lastSuccess.ToString('yyyy-MM-dd HH:mm') } else { 'n/a' }
+            MaxDelta_h   = if ($maxDelta -ne $null) { [math]::Round($maxDelta,2) } else { 'n/a' }
+            Failures     = $failureCount
+            Health       = $health
+        }
+    }
+
+    Clear-Host
+    Write-Host "AD-Replikationsprüfung (eingehend) – $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan
+    $rows | Sort-Object Health, DC | Format-Table -AutoSize
+}
+
+# Modul laden
 if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
     Write-Error "ActiveDirectory-Modul nicht gefunden. Bitte RSAT installieren."
+    Read-Host "`nDrücke Enter zum Schließen"
     exit 2
 }
 Import-Module ActiveDirectory -ErrorAction Stop
 
-$now = Get-Date
-
-# --- DCs der aktuellen Domäne holen ---
-try {
-    $dcs = Get-ADDomainController -Filter * -ErrorAction Stop
-} catch {
-    Write-Error "Domänencontroller konnten nicht gelesen werden: $($_.Exception.Message)"
-    exit 2
-}
-
-if (-not $dcs -or $dcs.Count -eq 0) {
-    Write-Error "Keine Domänencontroller gefunden."
-    exit 2
-}
-
-# --- Replikationsdaten je DC ermitteln (einfacher Loop, keine Pipes nach Blöcken) ---
-$rows = @()
-$anyProblem = $false
-
-foreach ($dc in $dcs) {
-    $dcName = $dc.HostName
-
-    # Eingehende Partner/Erfolge
-    $partners = @()
-    try { $partners = Get-ADReplicationPartnerMetadata -Target $dcName -Scope Server -PartnerType Incoming -ErrorAction Stop }
-    catch { $partners = @() }
-
-    $inboundCount = ($partners | Measure-Object).Count
-    $lastSuccessTimes = $partners | Where-Object { $_.LastReplicationSuccess } | Select-Object -ExpandProperty LastReplicationSuccess
-    $lastSuccess = if ($lastSuccessTimes) { ($lastSuccessTimes | Sort-Object -Descending | Select-Object -First 1) } else { $null }
-    $maxDelta = if ($lastSuccessTimes) {
-        ($lastSuccessTimes | ForEach-Object { ($now - $_).TotalHours } | Measure-Object -Maximum).Maximum
-    } else { $null }
-
-    # Fehler (eingehend)
-    $fail = @()
-    try { $fail = Get-ADReplicationFailure -Target $dcName -Scope Server -ErrorAction SilentlyContinue }
-    catch { $fail = @() }
-    $failureCount = ($fail | Measure-Object).Count
-
-    # Bewertung (simpel)
-    $health = 'OK'
-    if ($failureCount -gt 0 -or ($maxDelta -ne $null -and $maxDelta -gt $MaxHealthyHours)) {
-        $health = 'Problem'
-        $anyProblem = $true
+if ($Watch) {
+    while ($true) {
+        Show-Status
+        Write-Host ""
+        Write-Host "Aktualisiere wieder in $IntervalSeconds s ... (Beenden mit STRG+C)" -ForegroundColor Yellow
+        Start-Sleep -Seconds $IntervalSeconds
     }
-
-    $rows += [PSCustomObject]@{
-        DC           = $dcName
-        Site         = $dc.Site
-        InboundLinks = $inboundCount
-        LastSuccess  = if ($lastSuccess) { $lastSuccess.ToString('yyyy-MM-dd HH:mm') } else { 'n/a' }
-        MaxDelta_h   = if ($maxDelta -ne $null) { [math]::Round($maxDelta,2) } else { 'n/a' }
-        Failures     = $failureCount
-        Health       = $health
-    }
+} else {
+    Show-Status
+    # Hält das Fenster offen, bis Enter gedrückt wird
+    Read-Host "`nFertig. Drücke Enter zum Schließen"
 }
-
-# --- Ausgabe (kompakt) ---
-Write-Host "AD-Replikationsprüfung (eingehend) – $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan
-$rows | Sort-Object Health, DC | Format-Table -AutoSize
-
-# Exitcode: 0 = OK, 1 = Problem(e)
-if ($anyProblem) { exit 1 } else { exit 0 }
