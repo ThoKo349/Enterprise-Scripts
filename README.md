@@ -28,7 +28,7 @@ iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/SCR
 
 | Skript | Beschreibung | Einzeiler |
 |---|---|---|
-| **VBR-RestartAndCheckServices.ps1** | Startet alle relevanten **Veeam Backup & Replication** Dienste neu und prüft den Status. | `iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/Restart-VBR-Services.ps1")` |
+| **VBR-RestartAndCheckServices.ps1** | Startet alle relevanten **Veeam Backup & Replication** Dienste neu und prüft den Status. | `iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/VBR-RestartAndCheckServices.ps1")` |
 
 ---
 
