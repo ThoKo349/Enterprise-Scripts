@@ -12,16 +12,6 @@ Alle Skripte sind direkt aus GitHub per **Einzeiler** startbar.
 ```powershell
 iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/SCRIPT-NAME.ps1")
 ```
-
----
-
-## 📚 Inhaltsverzeichnis
-- [🖥 System / Veeam (VBR)](#-system--veeam-vbr)
-- [🔍 Active Directory (AD)](#-active-directory-ad)
-- [🖥 Windows / Systemskripte (SYS)](#-windows--systemskripte-sys)
-- [⚙️ Ausführung & Sicherheit](#️-ausführung--sicherheit)
-- [🤝 Mitwirken](#-mitwirken)
-
 ---
 
 ## 🖥 System / Veeam (VBR)
@@ -66,13 +56,3 @@ iex (irm "https://raw.githubusercontent.com/ThoKo349/Enterprise-Scripts/main/SCR
   Invoke-WebRequest -Uri $u -OutFile $p
   & $p -DaysInactive 120
   ```
-
----
-
-## 🤝 Mitwirken
-
-Beiträge willkommen!  
-Falls du ein nützliches Skript oder Verbesserungsvorschläge hast:
-1. Forke das Repo  
-2. Erstelle einen Branch (`feature/dein-script`)  
-3. Stelle einen Pull Request 🎉  
